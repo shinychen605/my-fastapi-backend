@@ -123,6 +123,4 @@ def summarize(req: SummarizeRequest):
         '<a href="#" onclick="history.back();return false" class="btn" style="background:#fff;color:#333;border:1px solid #e0e0e0">← 再处理一篇</a>'
         '</div></body></html>'
     )
-    html = success_html
-
-    return SummarizeResponse(html=html, share_url=share_url)
+return SummarizeResponse(html=html, share_url=share_url)
