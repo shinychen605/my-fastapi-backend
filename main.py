@@ -7,10 +7,10 @@ from openai import OpenAI
 
 SYSTEM_PROMPT = (
     '【系统提示词】你是一位专业的播客内容分析师。请根据用户上传的播客逐字稿，'
-    '生成一份结构严谨、信息密集的中文摘要。\n\n'
+    '生成一份结构严谨，信息密集的中文摘要。\n\n'
     '处理要求：\n'
     '1. 标题：简洁、吸引人、概括核心主题（最多25字）\n'
-    '2. 引言：1-2句话，包含主题、核心问题、主要嘉宾/主持人\n'
+    '2. 引言：1-2句话，包含主题、核心问题，主要嘉宾/主持人\n'
     '3. 核心内容：\n'
     '- 按逻辑归类，不按时间顺序\n'
     '- 每个论点必须保留支撑细节（数据、案例、逻辑）\n'
@@ -28,10 +28,10 @@ SYSTEM_PROMPT = (
     '推荐使用内联style属性或class，避免CSS选择器中出现{ }。'
 )
 
-BACK_URL = os.getenv('BACK_URL', 'https://nmikt8dnieuh.space.minimaxi.com')
+BACK_URL = os.getenv('BACK_URL', 'https://nl8nnilj1uyh.space.minimaxi.com')
 BACK_LABEL = os.getenv('BACK_LABEL', '← 播客摘要库')
 
-app = FastAPI(title='PodMemo API', version='1.4.0')
+app = FastAPI(title='PodMemo API', version='1.5.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class SummarizeRequest(BaseModel):
@@ -63,7 +63,6 @@ def summarize(req: SummarizeRequest):
     if not raw:
         raise HTTPException(status_code=502, detail='AI 未返回有效内容')
 
-    # { } 转义
     html = raw.replace('{', '&#123;').replace('}', '&#125;')
     title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or '播客摘要'
     title_esc = title.replace('<', '&lt;').replace('>', '&gt;')
@@ -78,13 +77,12 @@ def summarize(req: SummarizeRequest):
             f'<a href="{BACK_URL}" style="display:inline-block;margin:16px 0;font-size:14px;color:#c89a00;text-decoration:none">{BACK_LABEL}</a>'
             f'<h1 style="font-size:22px;font-weight:700;margin-bottom:16px">{title_esc}</h1>'
             f'{html}'
-            f'</div></body></html>'
+            '</div></body></html>'
         )
     else:
         back_tag = f'<a href="{BACK_URL}" style="display:inline-block;margin:16px 20px 0;font-size:14px;color:#c89a00;text-decoration:none">{BACK_LABEL}</a>'
         html = html.replace('<body>', '<body>' + back_tag, 1)
 
-    # Gist 分享链接
     share_url = ''
     token = os.getenv('GITHUB_TOKEN', '').strip()
     if token:
@@ -100,27 +98,4 @@ def summarize(req: SummarizeRequest):
         except Exception:
             pass
 
-    # 成功提示页：覆盖html显示跳转提示（不影响gist链接）
-    success_html = (
-        '<!DOCTYPE html><html lang="zh"><head>'
-        '<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
-        f'<title>摘要已生成</title>'
-        '<style>'
-        'body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5;min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0}'
-        '.box{background:#fff;border-radius:16px;padding:36px 40px;text-align:center;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.1)}'
-        'h2{font-size:20px;color:#1a1a1a;margin:0 0 8px}'
-        'p{color:#888;font-size:14px;margin:0 0 20px;line-height:1.6}'
-        '.url{background:#f5f5f5;border-radius:8px;padding:10px 14px;font-size:12px;color:#555;word-break:break-all;margin-bottom:16px}'
-        '.btn{display:inline-block;background:#1a1a1a;color:#fff;text-decoration:none;padding:10px 24px;border-radius:999px;font-size:14px}'
-        '.btn-gold{background:#c89a00}'
-        '</style>'
-        '</head><body>'
-        '<div class="box">'
-        f'<h2>✅ 摘要已生成</h2>'
-        '<p>分享链接（永久可访问）：</p>'
-        f'<div class="url">{share_url if share_url else "（生成失败，请下载HTML）"}</div>'
-        f'<a href="{BACK_URL}" class="btn btn-gold">{BACK_LABEL}</a><br><br>'
-        '<a href="#" onclick="history.back();return false" class="btn" style="background:#fff;color:#333;border:1px solid #e0e0e0">← 再处理一篇</a>'
-        '</div></body></html>'
-    )
-return SummarizeResponse(html=html, share_url=share_url)
+    return SummarizeResponse(html=html, share_url=share_url)
