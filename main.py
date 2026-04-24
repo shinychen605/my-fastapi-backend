@@ -23,15 +23,14 @@ SYSTEM_PROMPT = (
     '- 任何引用标记（如"根据xxx"、"来源：xxx"）\n'
     '- 任何版权文字的直接引用\n'
     '- "根据上传文件"、"资料显示"等来源痕迹\n\n'
-    '输出格式：直接输出HTML字符串（包含完整head/body/style，不要输出markdown）。\n'
-    '注意：HTML中如果包含CSS样式，{ 和 } 需要转义为 &#123; 和 &#125;。\n'
-    '推荐使用内联style属性或class，避免CSS选择器中出现{ }。'
+    '输出格式：直接输出HTML字符串（不要输出markdown，不要用代码块包裹）。\n'
+    '重要：直接输出HTML内容，不要加 ```html 或 ``` 等标记。'
 )
 
 BACK_URL = os.getenv('BACK_URL', 'https://nl8nnilj1uyh.space.minimaxi.com')
 BACK_LABEL = os.getenv('BACK_LABEL', '← 播客摘要库')
 
-app = FastAPI(title='PodMemo API', version='1.5.0')
+app = FastAPI(title='PodMemo API', version='1.6.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class SummarizeRequest(BaseModel):
@@ -63,6 +62,10 @@ def summarize(req: SummarizeRequest):
     if not raw:
         raise HTTPException(status_code=502, detail='AI 未返回有效内容')
 
+    # 去掉 markdown 代码块标记
+    raw = re.sub(r'^```html\s*', '', raw, flags=re.MULTILINE)
+    raw = re.sub(r'^```\s*$', '', raw, flags=re.MULTILINE)
+    # { } 转义
     html = raw.replace('{', '&#123;').replace('}', '&#125;')
     title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or '播客摘要'
     title_esc = title.replace('<', '&lt;').replace('>', '&gt;')
