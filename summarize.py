@@ -62,7 +62,9 @@ def _wrap_full_html(content: str) -> str:
     if re.search(r'<html[\s>]', content, flags=re.I):
         return content
     title = html.escape(_extract_title(content))
-    return BASE_HTML_TEMPLATE.format(title=title, content=content)
+    # escape { } to avoid conflict with Python str.format()
+    safe_content = content.replace('{', '{{').replace('}', '}}')
+    return BASE_HTML_TEMPLATE.format(title=title, content=safe_content)
 
 
 def summarize_text(text: str) -> str:
