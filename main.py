@@ -1,5 +1,4 @@
-import os
-import re
+import os, re
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -29,7 +28,10 @@ SYSTEM_PROMPT = (
     '推荐使用内联style属性或class，避免CSS选择器中出现{ }。'
 )
 
-app = FastAPI(title='PodMemo API', version='1.3.0')
+BACK_URL = os.getenv('BACK_URL', 'https://nmikt8dnieuh.space.minimaxi.com')
+BACK_LABEL = os.getenv('BACK_LABEL', '← 播客摘要库')
+
+app = FastAPI(title='PodMemo API', version='1.4.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class SummarizeRequest(BaseModel):
@@ -47,10 +49,10 @@ def summarize(req: SummarizeRequest):
     if not req.text or not req.text.strip():
         raise HTTPException(status_code=400, detail='text 不能为空')
     text = req.text[:int(os.getenv('MAX_INPUT_CHARS', '200000'))]
-
     api_key = os.getenv('DEEPSEEK_API_KEY', '').strip()
     if not api_key:
         raise HTTPException(status_code=500, detail='缺少 DEEPSEEK_API_KEY')
+
     client = OpenAI(api_key=api_key, base_url='https://api.deepseek.com')
     resp = client.chat.completions.create(
         model='deepseek-chat',
@@ -61,44 +63,66 @@ def summarize(req: SummarizeRequest):
     if not raw:
         raise HTTPException(status_code=502, detail='AI 未返回有效内容')
 
-    # 修复：如果内容包含 { }，替换为 HTML 转义字符，避免被 Python 当成格式化变量
+    # { } 转义
     html = raw.replace('{', '&#123;').replace('}', '&#125;')
+    title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or '播客摘要'
+    title_esc = title.replace('<', '&lt;').replace('>', '&gt;')
+
     if '<html' not in html.lower():
-        title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or '播客摘要'
-        title_escaped = title.replace('<', '&lt;').replace('>', '&gt;')
         html = (
             '<!DOCTYPE html><html lang="zh"><head>'
-            '<meta charset="UTF-8"/>'
-            '<meta name="viewport" content="width=device-width,initial-scale=1"/>'
-            f'<title>{title_escaped}</title>'
+            '<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
+            f'<title>{title_esc}</title>'
             '</head><body>'
-            f'<h1>{title_escaped}</h1>'
+            f'<div style="max-width:720px;margin:0 auto;padding:20px 20px 60px">'
+            f'<a href="{BACK_URL}" style="display:inline-block;margin:16px 0;font-size:14px;color:#c89a00;text-decoration:none">{BACK_LABEL}</a>'
+            f'<h1 style="font-size:22px;font-weight:700;margin-bottom:16px">{title_esc}</h1>'
             f'{html}'
-            '</body></html>'
+            f'</div></body></html>'
         )
+    else:
+        back_tag = f'<a href="{BACK_URL}" style="display:inline-block;margin:16px 20px 0;font-size:14px;color:#c89a00;text-decoration:none">{BACK_LABEL}</a>'
+        html = html.replace('<body>', '<body>' + back_tag, 1)
 
+    # Gist 分享链接
     share_url = ''
     token = os.getenv('GITHUB_TOKEN', '').strip()
     if token:
-        gist_title = re.sub(r'<[^>]*>', '', raw[:50]).strip() or 'podmemo-summary'
         try:
             gr = requests.post(
                 'https://api.github.com/gists',
-                headers={
-                    'Authorization': f'Bearer {token}',
-                    'Accept': 'application/vnd.github+json',
-                    'X-GitHub-Api-Version': '2022-11-28',
-                },
-                json={
-                    'description': f'PodMemo | {gist_title}',
-                    'public': True,
-                    'files': {f"{gist_title[:50]}.html": {'content': html}},
-                },
+                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'},
+                json={'description': f'PodMemo | {title}', 'public': True, 'files': {f"{title[:50]}.html": {'content': html}}},
                 timeout=15,
             )
             if gr.status_code in (200, 201):
                 share_url = gr.json().get('html_url', '') or ''
         except Exception:
             pass
+
+    # 成功提示页：覆盖html显示跳转提示（不影响gist链接）
+    success_html = (
+        '<!DOCTYPE html><html lang="zh"><head>'
+        '<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
+        f'<title>摘要已生成</title>'
+        '<style>'
+        'body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5;min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0}'
+        '.box{background:#fff;border-radius:16px;padding:36px 40px;text-align:center;max-width:420px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.1)}'
+        'h2{font-size:20px;color:#1a1a1a;margin:0 0 8px}'
+        'p{color:#888;font-size:14px;margin:0 0 20px;line-height:1.6}'
+        '.url{background:#f5f5f5;border-radius:8px;padding:10px 14px;font-size:12px;color:#555;word-break:break-all;margin-bottom:16px}'
+        '.btn{display:inline-block;background:#1a1a1a;color:#fff;text-decoration:none;padding:10px 24px;border-radius:999px;font-size:14px}'
+        '.btn-gold{background:#c89a00}'
+        '</style>'
+        '</head><body>'
+        '<div class="box">'
+        f'<h2>✅ 摘要已生成</h2>'
+        '<p>分享链接（永久可访问）：</p>'
+        f'<div class="url">{share_url if share_url else "（生成失败，请下载HTML）"}</div>'
+        f'<a href="{BACK_URL}" class="btn btn-gold">{BACK_LABEL}</a><br><br>'
+        '<a href="#" onclick="history.back();return false" class="btn" style="background:#fff;color:#333;border:1px solid #e0e0e0">← 再处理一篇</a>'
+        '</div></body></html>'
+    )
+    html = success_html
 
     return SummarizeResponse(html=html, share_url=share_url)
