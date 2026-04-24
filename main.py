@@ -1,4 +1,4 @@
-import os, re
+import os, re, datetime, base64
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -7,10 +7,10 @@ from openai import OpenAI
 
 SYSTEM_PROMPT = (
     '【系统提示词】你是一位专业的播客内容分析师。请根据用户上传的播客逐字稿，'
-    '生成一份结构严谨，信息密集的中文摘要。\n\n'
+    '生成一份结构严谨、信息密集的中文摘要。\n\n'
     '处理要求：\n'
     '1. 标题：简洁、吸引人、概括核心主题（最多25字）\n'
-    '2. 引言：1-2句话，包含主题、核心问题，主要嘉宾/主持人\n'
+    '2. 引言：1-2句话，包含主题、核心问题、主要嘉宾/主持人\n'
     '3. 核心内容：\n'
     '- 按逻辑归类，不按时间顺序\n'
     '- 每个论点必须保留支撑细节（数据、案例、逻辑）\n'
@@ -21,16 +21,16 @@ SYSTEM_PROMPT = (
     '5. 语言：纯中文，专业流畅客观\n\n'
     '禁止出现：\n'
     '- 任何引用标记（如"根据xxx"、"来源：xxx"）\n'
-    '- 任何版权文字的直接引用\n'
-    '- "根据上传文件"、"资料显示"等来源痕迹\n\n'
+    '- 任何版权文字的直接引用\n\n'
     '输出格式：直接输出HTML字符串（不要输出markdown，不要用代码块包裹）。\n'
     '重要：直接输出HTML内容，不要加 ```html 或 ``` 等标记。'
 )
 
-BACK_URL = os.getenv('BACK_URL', 'https://nl8nnilj1uyh.space.minimaxi.com')
+BACK_URL = os.getenv('BACK_URL', 'https://podcast-summary-9qm7g8sfw-shinychen605s-projects.vercel.app')
 BACK_LABEL = os.getenv('BACK_LABEL', '← 播客摘要库')
+VERCEL_TOKEN = os.getenv('VERCEL_TOKEN', '').strip()
 
-app = FastAPI(title='PodMemo API', version='1.6.0')
+app = FastAPI(title='PodMemo API', version='1.8.0')
 app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=True, allow_methods=['*'], allow_headers=['*'])
 
 class SummarizeRequest(BaseModel):
@@ -62,12 +62,11 @@ def summarize(req: SummarizeRequest):
     if not raw:
         raise HTTPException(status_code=502, detail='AI 未返回有效内容')
 
-    # 去掉 markdown 代码块标记
+    # 清理 markdown 代码块
     raw = re.sub(r'^```html\s*', '', raw, flags=re.MULTILINE)
     raw = re.sub(r'^```\s*$', '', raw, flags=re.MULTILINE)
-    # { } 转义
     html = raw.replace('{', '&#123;').replace('}', '&#125;')
-    title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or '播客摘要'
+    title = re.sub(r'<[^>]*>', '', raw[:60]).strip() or f'播客摘要-{datetime.datetime.now().strftime("%m%d%H%M")}'
     title_esc = title.replace('<', '&lt;').replace('>', '&gt;')
 
     if '<html' not in html.lower():
@@ -86,18 +85,64 @@ def summarize(req: SummarizeRequest):
         back_tag = f'<a href="{BACK_URL}" style="display:inline-block;margin:16px 20px 0;font-size:14px;color:#c89a00;text-decoration:none">{BACK_LABEL}</a>'
         html = html.replace('<body>', '<body>' + back_tag, 1)
 
+    # 1. Gist 分享链接（用旧的 gist-only token）
+    gist_token = os.getenv('GITHUB_TOKEN', '').strip()
     share_url = ''
-    token = os.getenv('GITHUB_TOKEN', '').strip()
-    if token:
+    if gist_token:
         try:
             gr = requests.post(
                 'https://api.github.com/gists',
-                headers={'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'},
+                headers={'Authorization': f'Bearer {gist_token}', 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28'},
                 json={'description': f'PodMemo | {title}', 'public': True, 'files': {f"{title[:50]}.html": {'content': html}}},
                 timeout=15,
             )
             if gr.status_code in (200, 201):
                 share_url = gr.json().get('html_url', '') or ''
+        except Exception:
+            pass
+
+    # 2. 推送到 GitHub 仓库（用新的 repo-token）
+    repo_token = os.getenv('GH_REPO_TOKEN', '').strip()
+    repo = os.getenv('GITHUB_REPO', '').strip() or 'shinychen605/podcast-summary'
+    if repo_token:
+        try:
+            filename = f"{title[:40]}.html"
+            api_url = f"https://api.github.com/repos/{repo}/contents/{filename}"
+            hdrs = {'Authorization': f'Bearer {repo_token}', 'Accept': 'application/vnd.github.v3+json'}
+            # 获取已存在的sha
+            get_r = requests.get(api_url, headers=hdrs, timeout=10)
+            sha = get_r.json().get('sha') if get_r.status_code == 200 else None
+            put_data = {'message': f'Add summary: {title}', 'content': base64.b64encode(html.encode()).decode()}
+            if sha: put_data['sha'] = sha
+            requests.put(api_url, headers=hdrs, json=put_data, timeout=15)
+
+            # 3. 更新 index.html 索引
+            idx_url = f"https://api.github.com/repos/{repo}/contents/index.html"
+            get_idx = requests.get(idx_url, headers=hdrs, timeout=10)
+            if get_idx.status_code == 200:
+                idx_content = base64.b64decode(get_idx.json()['content']).decode('utf-8')
+                today = datetime.date.today().strftime('%m-%d')
+                new_item = f'    <div class="item">\n      <span class="item-date">{today}</span>\n      <a class="item-title" href="{filename}">{title_esc}</a>\n    </div>'
+                if filename not in idx_content and '<div class="item">' in idx_content:
+                    idx_content = idx_content.replace('<div class="item">', new_item + '\n    <div class="item">', 1)
+                    idx_data = {
+                        'message': f'Update index: add {title}',
+                        'content': base64.b64encode(idx_content.encode()).decode(),
+                        'sha': get_idx.json().get('sha'),
+                    }
+                    requests.put(idx_url, headers=hdrs, json=idx_data, timeout=15)
+        except Exception as e:
+            print(f"GitHub push failed: {e}")
+
+    # 4. 触发 Vercel 重新部署
+    if VERCEL_TOKEN and repo:
+        try:
+            requests.post(
+                'https://api.vercel.com/v13/deployments',
+                headers={'Authorization': f'Bearer {VERCEL_TOKEN}', 'Content-Type': 'application/json'},
+                json={'gitSource': {'type': 'github', 'repo': repo}},
+                timeout=10,
+            )
         except Exception:
             pass
 
